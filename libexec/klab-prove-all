@@ -40,6 +40,10 @@ report () {
 }
 export -f report
 
+
+# TODO - handle success and fail cases differently - create zip folder for fail cases
+# TODO - introduce timeouts
+
 # perform a single prove
 do_prove () {
   # get the proof hash
@@ -47,18 +51,26 @@ do_prove () {
   # remember the name - first argument
   name=$1
   # if pass_rough then dump and do some reporting/gas work
-  if [[ $name =~ .*_pass_rough$ ]]; then
+  if [[ $name =~ .*_pass_oog$ ]]; then
     # report run
     touch $RUNNING_DIR/$hash
     report
     # do the actual proof
-    time klab prove --dump $KLAB_OUT/specs/$name.k
+    klab prove $KLAB_OUT/specs/$name.k >$KLAB_OUT/log/$hash.log 2>$KLAB_OUT/log/$hash.err.log
+    #report finish
+    rm $RUNNING_DIR/$hash
+    report
+  else
+    # report run
+    touch $RUNNING_DIR/$hash
+    report
+    # do the actual proof
+    klab prove --dump $KLAB_OUT/specs/$name.k >$KLAB_OUT/log/$hash.log 2>$KLAB_OUT/log/$hash.err.log
     result=$?
     # report finish
     rm $RUNNING_DIR/$hash
     # catch SIGINT
     if [ "$result" == "130" ]; then exit $result; fi
-    echo $result
     report
     # log status
     klab status $hash
@@ -67,19 +79,10 @@ do_prove () {
     if [ ! -z "$KLAB_WEBPROOF_DIR" ]; then
       mv $KLAB_OUT/log/boot_${hash}.json $KLAB_WEBPROOF_DIR
     fi;
-    # TODO - send to server: out/log/boot_$$(klab hash $<).json
     # analyze gas
     klab get-gas $hash > $GAS_DIR/${hash}.raw.kast.json
     klab gas-analyser --input $GAS_DIR/${hash}.raw.kast.json > $GAS_DIR/${hash}.kast
-  else
-    # report run
-    touch $RUNNING_DIR/$hash
-    report
-    # do the actual proof
-    time klab prove $KLAB_OUT/specs/$name.k
-    #report finish
-    rm $RUNNING_DIR/$hash
-    report
+    # rm -fr $KLAB_OUT
   fi;
 }
 export -f do_prove
@@ -92,9 +95,12 @@ make_batch () {
     klab build
 }
 
+rm -f $KLAB_OUT/meta/name/*
+rm -f $KLAB_OUT/meta/running/*
 klab build
 mkdir -p $GAS_DIR
 mkdir -p $RUNNING_DIR
+mkdir -p $KLAB_OUT/log
 count=1;
 while [ -s $OBLIGATIONS ]; do
   if [ $count -gt $BATCH_LIMIT ]; then
