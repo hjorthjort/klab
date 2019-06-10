@@ -8,15 +8,8 @@ import Control.Monad.State.Strict
 import Data.List (intercalate)
 import Data.Map.Strict as Map
 
--- grammar for K gas expressions
-data GasExpr = Nullary NullOp
-  | Unary UnOp GasExpr
-  | Binary BinOp GasExpr GasExpr
-  | ITE Cond GasExpr GasExpr
+data (Ord f) => NullOp f = Value f
   deriving (Eq, Ord, Show)
-
-data NullOp = StartGas | Literal Int
-  deriving (Eq, Show)
 data UnOp = SixtyFourth
   deriving (Eq, Ord, Show)
 data BinOp = Add | Sub | Mul
@@ -24,6 +17,37 @@ data BinOp = Add | Sub | Mul
 data Cond = Cond FormulaicString
   deriving (Eq, Ord, Show)
 
+-- grammar for K gas expressions
+-- a is the "base field"
+data (Show f, Ord f) => GasExpr f =
+  Nullary (NullOp f)
+  | Unary UnOp (GasExpr f)
+  | Binary BinOp (GasExpr f) (GasExpr f)
+  | ITE Cond (GasExpr f) (GasExpr f)
+  deriving (Eq, Ord, Show)
+
+data IntOrStartGas = Literal Int | StartGas
+  deriving (Eq)
+
+instance Show IntOrStartGas where
+  show StartGas = "VGas"
+  show n = show n
+
+type ConstantGasExpr = GasExpr Int
+type VariableFreeGasExpr = GasExpr IntOrStartGas
+
+-- coerceToConstant :: VariableFreeGasExpr -> ConstantGasExpr
+-- coerceToConstant (Nullary (Value (Literal n))) = Nullary (Value n)
+-- coerceToConstant (Unary op e) = Unary op (coerceToConstant e)
+-- coerceToConstant (Binary op e e') = Binary op (coerceToConstant e) (coerceToConstant e')
+-- coerceToConstant (ITE c e e') = ITE c (coerceToConstant e) (coerceToConstant e')
+
+promoteFromConstant :: ConstantGasExpr -> VariableFreeGasExpr
+promoteFromConstant (Nullary (Value (Literal n))) = Nullary (Value n)
+promoteFromConstant
+coerceToConstant (Unary op e) = Unary op (coerceToConstant e)
+coerceToConstant (Binary op e e') = Binary op (coerceToConstant e) (coerceToConstant e')
+coerceToConstant (ITE c e e') = ITE c (coerceToConstant e) (coerceToConstant e')
 -- a formatted K formula with typed variables
 data FormulaicString = FormulaicString
   { _formula :: String,
@@ -31,13 +55,12 @@ data FormulaicString = FormulaicString
   }
   deriving (Eq, Ord, Show)
 
-instance Ord NullOp where
+instance Ord IntOrStartGas where
   StartGas <= _ = True
-  (Literal _) <= StartGas = False
-  (Literal m) <= (Literal n) = m <= n
+  m <= n        = m <= n
 
-data StratificationMap = StratificationMap
- { _stratMap   :: Map GasExpr Int,
+data StratificationMap f = StratificationMap
+ { _stratMap   :: Map (GasExpr f) Int,
    _nextIndex  :: Int,
    _stratLabel :: String,
    _stratTypes :: Map String String
@@ -46,12 +69,12 @@ data StratificationMap = StratificationMap
 makeLenses ''StratificationMap
 makeLenses ''FormulaicString
 
-type Stratification a = State StratificationMap a
+type Stratification f a = State (StratificationMap f) a
 
 bracket :: String -> String
 bracket s = "( " ++ s ++ " )"
 
-unparse :: (Maybe StratificationMap) -> GasExpr -> String
+unparse :: (Show f, Ord f) => (Maybe (StratificationMap f)) -> (GasExpr f) -> String
 unparse msm expr =
   let (sm, tag, ts) = case msm of
         Just x  -> (x ^. stratMap,
@@ -61,8 +84,8 @@ unparse msm expr =
   in case Map.lookup expr sm of
     Just i -> tag ++ show i ++ formatKArgs (Map.toList ts)
     Nothing -> case expr of
-      (Nullary StartGas) -> "VGas"
-      (Nullary (Literal x)) -> show x
+      -- (Nullary (Value StartGas)) -> "VGas"
+      (Nullary (Value x)) -> show x
       (Unary SixtyFourth e) -> (bracket $ unparse msm e) ++ " /Int 64"
       (Binary op e f) -> bracket (s ++ opstr ++ t)
         where s = unparse msm e
@@ -79,7 +102,7 @@ unparse msm expr =
         where s = unparse msm e
               t = unparse msm f
 
-stratifier :: GasExpr -> Stratification ()
+stratifier :: (Show f, Ord f) => (GasExpr f) -> Stratification f ()
 stratifier expr = do
   smap <- get
   -- insertSoft means we deduplicate the labels
@@ -105,12 +128,10 @@ stratifier expr = do
       stratifier e
       stratifier f
       return ()
-    (Nullary (Literal _)) ->
-      return ()
-    (Nullary (StartGas)) ->
+    (Nullary _) ->
       return ()
 
-stratify :: String -> GasExpr -> StratificationMap
+stratify :: (Show f, Ord f) => String -> (GasExpr f) -> (StratificationMap f)
 stratify s e = execState (stratifier e)
   (StratificationMap
     { _stratMap   = mempty,
@@ -119,11 +140,11 @@ stratify s e = execState (stratifier e)
       _stratTypes = mempty
     })
 
-formatStratifiedSyntax :: StratificationMap -> String
+formatStratifiedSyntax :: (Show f, Ord f) => (StratificationMap f) -> String
 formatStratifiedSyntax sm =
   Map.foldlWithKey (formatStratifiedLeaf sm) "" (view stratMap sm)
 
-formatStratifiedLeaf :: StratificationMap -> String -> GasExpr -> Int -> String
+formatStratifiedLeaf :: (Show f, Ord f) => (StratificationMap f) -> String -> (GasExpr f) -> Int -> String
 formatStratifiedLeaf sm acc expr i =
   let args = Map.toList $ sm ^. stratTypes in acc
   ++ "syntax Int ::= \"" ++ tag ++ show i

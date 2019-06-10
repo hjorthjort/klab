@@ -24,16 +24,16 @@ data Kast = Kast {
 
 instance FromJSON Kast
 
-kastToGasExpr :: Kast -> Either String GasExpr
+kastToGasExpr :: Kast -> Either String (VariableFreeGasExpr)
 kastToGasExpr kast = case node kast of
   "KVariable" -> case originalName kast of
     Just somevar ->
       if "VGas" `isPrefixOf` somevar
-      then Right $ Nullary StartGas
+      then Right $ Nullary (Value StartGas)
       else Left $ "Can't have variables in gas expressions, found: " ++ somevar
 
   "KToken" -> case sort kast of
-    Just "Int" -> Right $ Nullary $ Literal n
+    Just "Int" -> Right $ Nullary $ Value $ Literal n
       where n = read t
             Just t = token kast
     Just somesort -> Left $ "Can't have sorts other than Int, found: " ++ somesort
@@ -65,7 +65,7 @@ kastToGasExpr kast = case node kast of
         Left err -> Left err
         Right e -> case kastToGasExpr arg2 of
           Left err -> Left err
-          Right (Nullary (Literal 64)) -> Right $ Unary SixtyFourth e
+          Right (Nullary (Value (Literal 64))) -> Right $ Unary SixtyFourth e
           Right n -> Left $ "Gas expressions should have /64 only, found: /" ++ (show n)
 
     Just "#if_#then_#else_#fi" -> let Just [arg_c, arg1, arg2] = args kast in
